@@ -8,7 +8,7 @@ Parameters:
   GitHubOwner:
     Type: String
     AllowedPattern: '[A-Za-z0-9-]+'
-    Default: anshrma
+    Default: wonderfate
   GitHubRepository:
     Type: String
     AllowedPattern: '[A-Za-z0-9-]+'
@@ -141,7 +141,7 @@ Resources:
       AuthType: PERSONAL_ACCESS_TOKEN
       ServerType: GITHUB
       Token: >-
-        {{resolve:secretsmanager:github-oauth-token:SecretString:GITHUB_ACCESS_TOKEN}}
+        {{resolve:secretsmanager:github-oauth-token:SecretString::}}
 
   CodeBuildProject:
     Type: 'AWS::CodeBuild::Project'
@@ -259,7 +259,7 @@ Resources:
                 Repo: !Ref GitHubRepository
                 Branch: main
                 PollForSourceChanges: false
-                OAuthToken: '{{resolve:secretsmanager:github-oauth-token:SecretString:GITHUB_ACCESS_TOKEN}}'
+                OAuthToken: '{{resolve:secretsmanager:github-oauth-token:SecretString::}}'
               OutputArtifacts:
                 - Name: SourceCode
               RunOrder: 1
@@ -300,7 +300,7 @@ Resources:
       Authentication: GITHUB_HMAC
       AuthenticationConfiguration:
         SecretToken: >-
-          {{resolve:secretsmanager:github-oauth-token:SecretString:GITHUB_ACCESS_TOKEN}}
+          {{resolve:secretsmanager:github-oauth-token:SecretString::}}
       RegisterWithThirdParty: true
       Filters:
         - JsonPath: $.ref

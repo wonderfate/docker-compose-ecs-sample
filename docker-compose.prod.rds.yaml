@@ -1,10 +1,10 @@
 services:
   backend:
     environment:
-        - MY_SQL_DATABASE=workshop
-        - MYSQL_ROOT_PASSWORD_FILE=/run/secrets/db-password
-        - MY_SQL_HOST=${RDS_ENDPOINT}
-        - MY_SQL_USER=admin
+      - MY_SQL_DATABASE=workshop
+      - MYSQL_ROOT_PASSWORD_FILE=/run/secrets/db-password
+      - MY_SQL_HOST=${RDS_ENDPOINT}
+      - MY_SQL_USER=fate
 
 secrets:
   db-password:

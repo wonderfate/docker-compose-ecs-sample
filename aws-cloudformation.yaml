@@ -1,0 +1,698 @@
+AWSTemplateFormatVersion: 2010-09-09
+Resources:
+  BackendService:
+    DependsOn:
+    - DbService
+    Properties:
+      Cluster:
+        Fn::GetAtt:
+        - Cluster
+        - Arn
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      DeploymentController:
+        Type: ECS
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+          - Ref: BacknetNetwork
+          - Ref: FrontnetNetwork
+          Subnets:
+          - subnet-01bb84db668987a03
+          - subnet-0cb74d7b3a242e379
+          - subnet-0a132e93af8a09b42
+          - subnet-0676bfda5de894307
+          - subnet-0d384c36b3f724bfd
+          - subnet-092c5458b1a446fcc
+      PlatformVersion: 1.4.0
+      PropagateTags: SERVICE
+      SchedulingStrategy: REPLICA
+      ServiceRegistries:
+      - RegistryArn:
+          Fn::GetAtt:
+          - BackendServiceDiscoveryEntry
+          - Arn
+      Tags:
+      - Key: com.docker.compose.project
+        Value: docker-compose-ecs-sample
+      - Key: com.docker.compose.service
+        Value: backend
+      TaskDefinition:
+        Ref: BackendTaskDefinition
+    Type: AWS::ECS::Service
+  BackendServiceDiscoveryEntry:
+    Properties:
+      Description: '"backend" service discovery entry in Cloud Map'
+      DnsConfig:
+        DnsRecords:
+        - TTL: 60
+          Type: A
+        RoutingPolicy: MULTIVALUE
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+      Name: backend
+      NamespaceId:
+        Ref: CloudMap
+    Type: AWS::ServiceDiscovery::Service
+  BackendTaskDefinition:
+    Properties:
+      ContainerDefinitions:
+      - Command:
+        - '[{"Name":"db-password","Keys":null}]'
+        Essential: false
+        Image: docker/ecs-secrets-sidecar:1.0
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group:
+              Ref: LogGroup
+            awslogs-region:
+              Ref: AWS::Region
+            awslogs-stream-prefix: docker-compose-ecs-sample
+        MountPoints:
+        - ContainerPath: /run/secrets/
+          SourceVolume: secrets
+        Name: Backend_Secrets_InitContainer
+        Secrets:
+        - Name: db-password
+          ValueFrom:
+            Ref: DockercomposeecssampledbpasswordSecret
+      - Command:
+        - us-east-1.compute.internal
+        - docker-compose-ecs-sample.local
+        Essential: false
+        Image: docker/ecs-searchdomain-sidecar:1.0
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group:
+              Ref: LogGroup
+            awslogs-region:
+              Ref: AWS::Region
+            awslogs-stream-prefix: docker-compose-ecs-sample
+        Name: Backend_ResolvConf_InitContainer
+      - DependsOn:
+        - Condition: SUCCESS
+          ContainerName: Backend_Secrets_InitContainer
+        - Condition: SUCCESS
+          ContainerName: Backend_ResolvConf_InitContainer
+        Essential: true
+        Image: docker.io/wonderfate/docker-compose-ecs-sample-backend:latest@sha256:5e09f06cd77b3d2125a0e2bfd3a248b6f422e9e1a34f51671e24de22bb091d3e
+        LinuxParameters: {}
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group:
+              Ref: LogGroup
+            awslogs-region:
+              Ref: AWS::Region
+            awslogs-stream-prefix: docker-compose-ecs-sample
+        MountPoints:
+        - ContainerPath: /run/secrets/
+          ReadOnly: true
+          SourceVolume: secrets
+        Name: backend
+        RepositoryCredentials:
+          CredentialsParameter: arn:aws:secretsmanager:us-east-1:507173226592:secret:pullcredentials-IcDOHn
+      Cpu: "256"
+      ExecutionRoleArn:
+        Ref: BackendTaskExecutionRole
+      Family: docker-compose-ecs-sample-backend
+      Memory: "512"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+      - FARGATE
+      Volumes:
+      - Name: secrets
+    Type: AWS::ECS::TaskDefinition
+  BackendTaskExecutionRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Condition: {}
+          Effect: Allow
+          Principal:
+            Service: ecs-tasks.amazonaws.com
+        Version: 2012-10-17
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+      Policies:
+      - PolicyDocument:
+          Statement:
+          - Action:
+            - secretsmanager:GetSecretValue
+            - ssm:GetParameters
+            - kms:Decrypt
+            Condition: {}
+            Effect: Allow
+            Principal: {}
+            Resource:
+            - arn:aws:secretsmanager:us-east-1:507173226592:secret:pullcredentials-IcDOHn
+            - Ref: DockercomposeecssampledbpasswordSecret
+        PolicyName: backendGrantAccessToSecrets
+      Tags:
+      - Key: com.docker.compose.project
+        Value: docker-compose-ecs-sample
+      - Key: com.docker.compose.service
+        Value: backend
+    Type: AWS::IAM::Role
+  BacknetNetwork:
+    Properties:
+      GroupDescription: docker-compose-ecs-sample Security Group for backnet network
+      Tags:
+      - Key: com.docker.compose.project
+        Value: docker-compose-ecs-sample
+      - Key: com.docker.compose.network
+        Value: docker-compose-ecs-sample_backnet
+      VpcId: vpc-0117f4c021121f135
+    Type: AWS::EC2::SecurityGroup
+  BacknetNetworkIngress:
+    Properties:
+      Description: Allow communication within network backnet
+      GroupId:
+        Ref: BacknetNetwork
+      IpProtocol: "-1"
+      SourceSecurityGroupId:
+        Ref: BacknetNetwork
+    Type: AWS::EC2::SecurityGroupIngress
+  CloudMap:
+    Properties:
+      Description: Service Map for Docker Compose project docker-compose-ecs-sample
+      Name: docker-compose-ecs-sample.local
+      Vpc: vpc-0117f4c021121f135
+    Type: AWS::ServiceDiscovery::PrivateDnsNamespace
+  Cluster:
+    Properties:
+      ClusterName: docker-compose-ecs-sample
+      Tags:
+      - Key: com.docker.compose.project
+        Value: docker-compose-ecs-sample
+    Type: AWS::ECS::Cluster
+  DbService:
+    DependsOn:
+    - DbdataNFSMountTargetOnSubnet01bb84db668987a03
+    - DbdataNFSMountTargetOnSubnet0cb74d7b3a242e379
+    - DbdataNFSMountTargetOnSubnet0a132e93af8a09b42
+    - DbdataNFSMountTargetOnSubnet0676bfda5de894307
+    - DbdataNFSMountTargetOnSubnet0d384c36b3f724bfd
+    - DbdataNFSMountTargetOnSubnet092c5458b1a446fcc
+    Properties:
+      Cluster:
+        Fn::GetAtt:
+        - Cluster
+        - Arn
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      DeploymentController:
+        Type: ECS
+      DesiredCount: 1
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+          - Ref: BacknetNetwork
+          Subnets:
+          - subnet-01bb84db668987a03
+          - subnet-0cb74d7b3a242e379
+          - subnet-0a132e93af8a09b42
+          - subnet-0676bfda5de894307
+          - subnet-0d384c36b3f724bfd
+          - subnet-092c5458b1a446fcc
+      PlatformVersion: 1.4.0
+      PropagateTags: SERVICE
+      SchedulingStrategy: REPLICA
+      ServiceRegistries:
+      - RegistryArn:
+          Fn::GetAtt:
+          - DbServiceDiscoveryEntry
+          - Arn
+      Tags:
+      - Key: com.docker.compose.project
+        Value: docker-compose-ecs-sample
+      - Key: com.docker.compose.service
+        Value: db
+      TaskDefinition:
+        Ref: DbTaskDefinition
+    Type: AWS::ECS::Service
+  DbServiceDiscoveryEntry:
+    Properties:
+      Description: '"db" service discovery entry in Cloud Map'
+      DnsConfig:
+        DnsRecords:
+        - TTL: 60
+          Type: A
+        RoutingPolicy: MULTIVALUE
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+      Name: db
+      NamespaceId:
+        Ref: CloudMap
+    Type: AWS::ServiceDiscovery::Service
+  DbTaskDefinition:
+    Properties:
+      ContainerDefinitions:
+      - Command:
+        - '[{"Name":"db-password","Keys":null}]'
+        Essential: false
+        Image: docker/ecs-secrets-sidecar:1.0
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group:
+              Ref: LogGroup
+            awslogs-region:
+              Ref: AWS::Region
+            awslogs-stream-prefix: docker-compose-ecs-sample
+        MountPoints:
+        - ContainerPath: /run/secrets/
+          SourceVolume: secrets
+        Name: Db_Secrets_InitContainer
+        Secrets:
+        - Name: db-password
+          ValueFrom:
+            Ref: DockercomposeecssampledbpasswordSecret
+      - Command:
+        - us-east-1.compute.internal
+        - docker-compose-ecs-sample.local
+        Essential: false
+        Image: docker/ecs-searchdomain-sidecar:1.0
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group:
+              Ref: LogGroup
+            awslogs-region:
+              Ref: AWS::Region
+            awslogs-stream-prefix: docker-compose-ecs-sample
+        Name: Db_ResolvConf_InitContainer
+      - Command:
+        - --default-authentication-plugin=mysql_native_password
+        DependsOn:
+        - Condition: SUCCESS
+          ContainerName: Db_Secrets_InitContainer
+        - Condition: SUCCESS
+          ContainerName: Db_ResolvConf_InitContainer
+        Environment:
+        - Name: MYSQL_DATABASE
+          Value: example
+        - Name: MYSQL_ROOT_PASSWORD_FILE
+          Value: /run/secrets/db-password
+        Essential: true
+        Image: docker.io/library/mysql:8.0.19@sha256:9643e9fbd6330d10686f8922292dcb20995e7b792c17d4e94ddf95255f1d5449
+        LinuxParameters: {}
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group:
+              Ref: LogGroup
+            awslogs-region:
+              Ref: AWS::Region
+            awslogs-stream-prefix: docker-compose-ecs-sample
+        MountPoints:
+        - ContainerPath: /run/secrets/
+          ReadOnly: true
+          SourceVolume: secrets
+        - ContainerPath: /var/lib/mysql
+          SourceVolume: db-data
+        Name: db
+      Cpu: "256"
+      ExecutionRoleArn:
+        Ref: DbTaskExecutionRole
+      Family: docker-compose-ecs-sample-db
+      Memory: "512"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+      - FARGATE
+      TaskRoleArn:
+        Ref: DbTaskRole
+      Volumes:
+      - Name: secrets
+      - EFSVolumeConfiguration:
+          AuthorizationConfig:
+            AccessPointId:
+              Ref: DbdataAccessPoint
+            IAM: ENABLED
+          FilesystemId: fs-0fc9e3566fb4d5cc3
+          TransitEncryption: ENABLED
+        Name: db-data
+    Type: AWS::ECS::TaskDefinition
+  DbTaskExecutionRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Condition: {}
+          Effect: Allow
+          Principal:
+            Service: ecs-tasks.amazonaws.com
+        Version: 2012-10-17
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+      Policies:
+      - PolicyDocument:
+          Statement:
+          - Action:
+            - secretsmanager:GetSecretValue
+            - ssm:GetParameters
+            - kms:Decrypt
+            Condition: {}
+            Effect: Allow
+            Principal: {}
+            Resource:
+            - Ref: DockercomposeecssampledbpasswordSecret
+        PolicyName: dbGrantAccessToSecrets
+      Tags:
+      - Key: com.docker.compose.project
+        Value: docker-compose-ecs-sample
+      - Key: com.docker.compose.service
+        Value: db
+    Type: AWS::IAM::Role
+  DbTaskRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Condition: {}
+          Effect: Allow
+          Principal:
+            Service: ecs-tasks.amazonaws.com
+        Version: 2012-10-17
+      Policies:
+      - PolicyDocument:
+          Statement:
+          - Action:
+            - elasticfilesystem:ClientMount
+            - elasticfilesystem:ClientWrite
+            - elasticfilesystem:ClientRootAccess
+            Condition:
+              StringEquals:
+                elasticfilesystem:AccessPointArn:
+                  Ref: DbdataAccessPoint
+            Effect: Allow
+            Principal: {}
+            Resource:
+            - arn:aws:elasticfilesystem:us-east-1:507173226592:file-system/fs-0fc9e3566fb4d5cc3
+          Version: 2012-10-17
+        PolicyName: DbDbdataVolumeMountPolicy
+      Tags:
+      - Key: com.docker.compose.project
+        Value: docker-compose-ecs-sample
+      - Key: com.docker.compose.service
+        Value: db
+    Type: AWS::IAM::Role
+  DbdataAccessPoint:
+    Properties:
+      AccessPointTags:
+      - Key: com.docker.compose.project
+        Value: docker-compose-ecs-sample
+      - Key: com.docker.compose.volume
+        Value: db-data
+      - Key: Name
+        Value: docker-compose-ecs-sample_db-data
+      FileSystemId: fs-0fc9e3566fb4d5cc3
+    Type: AWS::EFS::AccessPoint
+  DbdataNFSMountTargetOnSubnet01bb84db668987a03:
+    Properties:
+      FileSystemId: fs-0fc9e3566fb4d5cc3
+      SecurityGroups:
+      - Ref: BacknetNetwork
+      - Ref: FrontnetNetwork
+      SubnetId: subnet-01bb84db668987a03
+    Type: AWS::EFS::MountTarget
+  DbdataNFSMountTargetOnSubnet092c5458b1a446fcc:
+    Properties:
+      FileSystemId: fs-0fc9e3566fb4d5cc3
+      SecurityGroups:
+      - Ref: BacknetNetwork
+      - Ref: FrontnetNetwork
+      SubnetId: subnet-092c5458b1a446fcc
+    Type: AWS::EFS::MountTarget
+  DbdataNFSMountTargetOnSubnet0676bfda5de894307:
+    Properties:
+      FileSystemId: fs-0fc9e3566fb4d5cc3
+      SecurityGroups:
+      - Ref: BacknetNetwork
+      - Ref: FrontnetNetwork
+      SubnetId: subnet-0676bfda5de894307
+    Type: AWS::EFS::MountTarget
+  DbdataNFSMountTargetOnSubnet0a132e93af8a09b42:
+    Properties:
+      FileSystemId: fs-0fc9e3566fb4d5cc3
+      SecurityGroups:
+      - Ref: BacknetNetwork
+      - Ref: FrontnetNetwork
+      SubnetId: subnet-0a132e93af8a09b42
+    Type: AWS::EFS::MountTarget
+  DbdataNFSMountTargetOnSubnet0cb74d7b3a242e379:
+    Properties:
+      FileSystemId: fs-0fc9e3566fb4d5cc3
+      SecurityGroups:
+      - Ref: BacknetNetwork
+      - Ref: FrontnetNetwork
+      SubnetId: subnet-0cb74d7b3a242e379
+    Type: AWS::EFS::MountTarget
+  DbdataNFSMountTargetOnSubnet0d384c36b3f724bfd:
+    Properties:
+      FileSystemId: fs-0fc9e3566fb4d5cc3
+      SecurityGroups:
+      - Ref: BacknetNetwork
+      - Ref: FrontnetNetwork
+      SubnetId: subnet-0d384c36b3f724bfd
+    Type: AWS::EFS::MountTarget
+  DockercomposeecssampledbpasswordSecret:
+    Properties:
+      Description: Secret docker-compose-ecs-sample_db-password
+      SecretString: db-78n9n
+      Tags:
+      - Key: com.docker.compose.project
+        Value: docker-compose-ecs-sample
+    Type: AWS::SecretsManager::Secret
+  FrontendService:
+    DependsOn:
+    - FrontendTCP3000Listener
+    - BackendService
+    Properties:
+      Cluster:
+        Fn::GetAtt:
+        - Cluster
+        - Arn
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 100
+      DeploymentController:
+        Type: ECS
+      DesiredCount: 1
+      LaunchType: FARGATE
+      LoadBalancers:
+      - ContainerName: frontend
+        ContainerPort: 3000
+        TargetGroupArn:
+          Ref: FrontendTCP3000TargetGroup
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+          - Ref: FrontnetNetwork
+          Subnets:
+          - subnet-01bb84db668987a03
+          - subnet-0cb74d7b3a242e379
+          - subnet-0a132e93af8a09b42
+          - subnet-0676bfda5de894307
+          - subnet-0d384c36b3f724bfd
+          - subnet-092c5458b1a446fcc
+      PlatformVersion: 1.4.0
+      PropagateTags: SERVICE
+      SchedulingStrategy: REPLICA
+      ServiceRegistries:
+      - RegistryArn:
+          Fn::GetAtt:
+          - FrontendServiceDiscoveryEntry
+          - Arn
+      Tags:
+      - Key: com.docker.compose.project
+        Value: docker-compose-ecs-sample
+      - Key: com.docker.compose.service
+        Value: frontend
+      TaskDefinition:
+        Ref: FrontendTaskDefinition
+    Type: AWS::ECS::Service
+  FrontendServiceDiscoveryEntry:
+    Properties:
+      Description: '"frontend" service discovery entry in Cloud Map'
+      DnsConfig:
+        DnsRecords:
+        - TTL: 60
+          Type: A
+        RoutingPolicy: MULTIVALUE
+      HealthCheckCustomConfig:
+        FailureThreshold: 1
+      Name: frontend
+      NamespaceId:
+        Ref: CloudMap
+    Type: AWS::ServiceDiscovery::Service
+  FrontendTCP3000Listener:
+    Properties:
+      DefaultActions:
+      - ForwardConfig:
+          TargetGroups:
+          - TargetGroupArn:
+              Ref: FrontendTCP3000TargetGroup
+        Type: forward
+      LoadBalancerArn:
+        Ref: LoadBalancer
+      Port: 3000
+      Protocol: TCP
+    Type: AWS::ElasticLoadBalancingV2::Listener
+  FrontendTCP3000TargetGroup:
+    Properties:
+      Port: 3000
+      Protocol: TCP
+      Tags:
+      - Key: com.docker.compose.project
+        Value: docker-compose-ecs-sample
+      TargetType: ip
+      VpcId: vpc-0117f4c021121f135
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+  FrontendTaskDefinition:
+    Properties:
+      ContainerDefinitions:
+      - Command:
+        - us-east-1.compute.internal
+        - docker-compose-ecs-sample.local
+        Essential: false
+        Image: docker/ecs-searchdomain-sidecar:1.0
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group:
+              Ref: LogGroup
+            awslogs-region:
+              Ref: AWS::Region
+            awslogs-stream-prefix: docker-compose-ecs-sample
+        Name: Frontend_ResolvConf_InitContainer
+      - DependsOn:
+        - Condition: SUCCESS
+          ContainerName: Frontend_ResolvConf_InitContainer
+        Essential: true
+        Image: docker.io/wonderfate/docker-compose-ecs-sample-frontend:latest@sha256:f91b67bbfe560800a6619492c228fdbe4bd7ff8a06161b48a50f525edb43b39a
+        LinuxParameters: {}
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group:
+              Ref: LogGroup
+            awslogs-region:
+              Ref: AWS::Region
+            awslogs-stream-prefix: docker-compose-ecs-sample
+        Name: frontend
+        PortMappings:
+        - ContainerPort: 3000
+          HostPort: 3000
+          Protocol: tcp
+        RepositoryCredentials:
+          CredentialsParameter: arn:aws:secretsmanager:us-east-1:507173226592:secret:pullcredentials-IcDOHn
+      Cpu: "256"
+      ExecutionRoleArn:
+        Ref: FrontendTaskExecutionRole
+      Family: docker-compose-ecs-sample-frontend
+      Memory: "512"
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+      - FARGATE
+    Type: AWS::ECS::TaskDefinition
+  FrontendTaskExecutionRole:
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action:
+          - sts:AssumeRole
+          Condition: {}
+          Effect: Allow
+          Principal:
+            Service: ecs-tasks.amazonaws.com
+        Version: 2012-10-17
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+      - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+      Policies:
+      - PolicyDocument:
+          Statement:
+          - Action:
+            - secretsmanager:GetSecretValue
+            - ssm:GetParameters
+            - kms:Decrypt
+            Condition: {}
+            Effect: Allow
+            Principal: {}
+            Resource:
+            - arn:aws:secretsmanager:us-east-1:507173226592:secret:pullcredentials-IcDOHn
+        PolicyName: frontendGrantAccessToSecrets
+      Tags:
+      - Key: com.docker.compose.project
+        Value: docker-compose-ecs-sample
+      - Key: com.docker.compose.service
+        Value: frontend
+    Type: AWS::IAM::Role
+  Frontnet3000Ingress:
+    Properties:
+      CidrIp: 0.0.0.0/0
+      Description: frontend:3000/tcp on frontnet network
+      FromPort: 3000
+      GroupId:
+        Ref: FrontnetNetwork
+      IpProtocol: TCP
+      ToPort: 3000
+    Type: AWS::EC2::SecurityGroupIngress
+  FrontnetNetwork:
+    Properties:
+      GroupDescription: docker-compose-ecs-sample Security Group for frontnet network
+      Tags:
+      - Key: com.docker.compose.project
+        Value: docker-compose-ecs-sample
+      - Key: com.docker.compose.network
+        Value: docker-compose-ecs-sample_frontnet
+      VpcId: vpc-0117f4c021121f135
+    Type: AWS::EC2::SecurityGroup
+  FrontnetNetworkIngress:
+    Properties:
+      Description: Allow communication within network frontnet
+      GroupId:
+        Ref: FrontnetNetwork
+      IpProtocol: "-1"
+      SourceSecurityGroupId:
+        Ref: FrontnetNetwork
+    Type: AWS::EC2::SecurityGroupIngress
+  LoadBalancer:
+    Properties:
+      LoadBalancerAttributes:
+      - Key: load_balancing.cross_zone.enabled
+        Value: "true"
+      Scheme: internet-facing
+      Subnets:
+      - subnet-01bb84db668987a03
+      - subnet-0cb74d7b3a242e379
+      - subnet-0a132e93af8a09b42
+      - subnet-0676bfda5de894307
+      - subnet-0d384c36b3f724bfd
+      - subnet-092c5458b1a446fcc
+      Tags:
+      - Key: com.docker.compose.project
+        Value: docker-compose-ecs-sample
+      Type: network
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+  LogGroup:
+    Properties:
+      LogGroupName: /docker-compose/docker-compose-ecs-sample
+    Type: AWS::Logs::LogGroup
